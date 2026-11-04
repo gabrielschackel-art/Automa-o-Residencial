@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minha Casa Inteligente</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#e8edf1; --card:#f8fafb; --ink:#16212b; --mute:#5d6b78; --line:#cdd6dd;
+  --luz:#e89a00; --ar:#2563c9; --tv:#6a4bd6; --ok:#1f9d63; --erro:#c43d3d;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#10171d; --card:#18222b; --ink:#e8eef3; --mute:#8fa0ae; --line:#2b3947;
+    --luz:#f2b134; --ar:#6fa2f5; --tv:#a58dff; --ok:#3ecf8e; --erro:#ff7a7a;}
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:'Sora',system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1.45;padding:20px 16px 40px}
+main{max-width:980px;margin:0 auto}
+h1{font-size:1.6rem;margin:0 0 4px}
+h2{font-size:1.1rem;margin:0 0 14px}
+.sub{color:var(--mute);margin:0 0 20px;font-size:.9rem}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+.status{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:12px}
+.dot{width:12px;height:12px;border-radius:50%;background:var(--erro)}
+.dot.on{background:var(--ok)}
+.dot.wait{background:var(--luz)}
+details summary{cursor:pointer;color:var(--mute);font-size:.9rem;margin-bottom:10px}
+.cfg{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--mute)}
+input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+input:focus-visible,button:focus-visible{outline:3px solid var(--ar);outline-offset:2px}
+.acoes{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.grupo{margin-bottom:14px}
+.grupo h3{font-size:.85rem;color:var(--mute);margin:0 0 8px;font-weight:600}
+.grade{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.cmd{font:inherit;text-align:left;cursor:pointer;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-left:5px solid var(--cor);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;transition:transform .08s,background .15s}
+.cmd b{font-size:.95rem}
+.cmd small{font-size:.68rem;color:var(--mute);word-break:break-all}
+.cmd:active{transform:scale(.97)}
+.cmd.enviado{background:color-mix(in srgb,var(--cor) 22%,var(--bg))}
+.cmd:disabled{opacity:.45;cursor:not-allowed}
+.btn{font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 16px;cursor:pointer;background:var(--ar);color:#fff}
+.btn.sec{background:transparent;color:var(--ink);border:1px solid var(--line)}
+#log{background:var(--bg);border:1px solid var(--line);border-radius:8px;height:150px;overflow:auto;padding:8px 10px;font:12px/1.5 ui-monospace,Consolas,monospace;margin:0}
+.luz{--cor:var(--luz)} .ar{--cor:var(--ar)} .tv{--cor:var(--tv)}
+@media (prefers-reduced-motion:reduce){.cmd{transition:none}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Minha Casa Inteligente</h1>
+  <p class="sub">Cada botão publica em um tópico MQTT próprio. Seu ESP32 só precisa assinar esses tópicos.</p>
+
+  <section>
+    <div class="status"><span id="dot" class="dot"></span><span id="estado">Desconectado</span></div>
+    <details>
+      <summary>Configurar conexão</summary>
+      <div class="cfg">
+        <label>Broker<input id="host" value="w8767ca9.ala.us-east-1.emqxsl.com"></label>
+        <label>Porta (WSS)<input id="porta" value="8084" inputmode="numeric"></label>
+        <label>Path<input id="path" value="/mqtt"></label>
+        <label>Usuário<input id="user" value="RICARDO" autocomplete="off"></label>
+        <label>Senha<input id="pass" type="password" value="senai" autocomplete="off"></label>
+        <label>Prefixo dos tópicos<input id="base" value="casa"></label>
+      </div>
+    </details>
+    <div class="acoes">
+      <button class="btn" id="conectar">Conectar</button>
+      <button class="btn sec" id="desconectar">Desconectar</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Iluminação</h2>
+    <div id="luz"></div>
+  </section>
+
+  <section>
+    <h2>Ar-condicionado</h2>
+    <div id="ar"></div>
+  </section>
+
+  <section>
+    <h2>TV</h2>
+    <div id="tv"></div>
+  </section>
+
+  <section>
+    <h2>Registro</h2>
+    <pre id="log" aria-live="polite"></pre>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+/* Cada comando = [rótulo, sufixo do tópico]. Tópico final: <prefixo>/<sufixo> */
+const COMANDOS = {
+  luz: [
+    ['Sala', [['Ligar','luz/sala/ligar'],['Desligar','luz/sala/desligar']]],
+    ['Quarto', [['Ligar','luz/quarto/ligar'],['Desligar','luz/quarto/desligar']]],
+    ['Cozinha', [['Ligar','luz/cozinha/ligar'],['Desligar','luz/cozinha/desligar']]],
+    ['Casa toda', [['Ligar todas','luz/todas/ligar'],['Desligar todas','luz/todas/desligar']]]
+  ],
+  ar: [
+    ['Energia', [['Ligar','ar/ligar'],['Desligar','ar/desligar']]],
+    ['Temperatura', [['Aumentar','ar/temperatura/aumentar'],['Diminuir','ar/temperatura/diminuir']]],
+    ['Modo', [['Frio','ar/modo/frio'],['Ventilar','ar/modo/ventilar'],['Seco','ar/modo/seco'],['Automático','ar/modo/auto']]],
+    ['Ventilador', [['Baixo','ar/ventilador/baixo'],['Médio','ar/ventilador/medio'],['Alto','ar/ventilador/alto']]]
+  ],
+  tv: [
+    ['Energia', [['Ligar','tv/ligar'],['Desligar','tv/desligar']]],
+    ['Volume', [['Volume +','tv/volume/mais'],['Volume −','tv/volume/menos'],['Mudo','tv/volume/mudo']]],
+    ['Canal', [['Canal +','tv/canal/mais'],['Canal −','tv/canal/menos'],['Fonte','tv/fonte']]],
+    ['Navegação', [['Cima','tv/nav/cima'],['Baixo','tv/nav/baixo'],['Esquerda','tv/nav/esquerda'],['Direita','tv/nav/direita'],['OK','tv/nav/ok'],['Voltar','tv/nav/voltar'],['Menu','tv/nav/menu']]]
+  ]
+};
+
+const $ = id => document.getElementById(id);
+let client = null;
+
+function log(msg){
+  const l = $('log');
+  l.textContent += new Date().toLocaleTimeString('pt-BR') + '  ' + msg + '\n';
+  l.scrollTop = l.scrollHeight;
+}
+function estado(txt, cls){
+  $('estado').textContent = txt;
+  $('dot').className = 'dot ' + (cls || '');
+}
+function habilitar(on){
+  document.querySelectorAll('.cmd').forEach(b => b.disabled = !on);
+}
+function topico(sufixo){
+  return $('base').value.trim().replace(/\/+$/,'') + '/' + sufixo;
+}
+
+function montar(){
+  for (const area in COMANDOS){
+    const raiz = $(area);
+    COMANDOS[area].forEach(([titulo, botoes]) => {
+      const g = document.createElement('div'); g.className = 'grupo';
+      const h = document.createElement('h3'); h.textContent = titulo;
+      const grade = document.createElement('div'); grade.className = 'grade';
+      botoes.forEach(([rotulo, suf]) => {
+        const b = document.createElement('button');
+        b.className = 'cmd ' + area; b.disabled = true; b.dataset.suf = suf;
+        b.innerHTML = '<b></b><small></small>';
+        b.firstChild.textContent = rotulo;
+        b.lastChild.textContent = suf;
+        b.addEventListener('click', () => enviar(b));
+        grade.appendChild(b);
+      });
+      g.append(h, grade); raiz.appendChild(g);
+    });
+  }
+}
+
+function enviar(btn){
+  if (!client || !client.connected){ log('Sem conexão com o broker.'); return; }
+  const t = topico(btn.dataset.suf);
+  client.publish(t, '1', {qos:1}, err => {
+    if (err) log('Erro ao publicar em ' + t + ': ' + err.message);
+    else log('Enviado → ' + t);
+  });
+  btn.classList.add('enviado');
+  setTimeout(() => btn.classList.remove('enviado'), 350);
+}
+
+function conectar(){
+  if (client){ client.end(true); client = null; }
+  const url = 'wss://' + $('host').value.trim() + ':' + $('porta').value.trim() + $('path').value.trim();
+  estado('Conectando…', 'wait');
+  log('Conectando em ' + url);
+  client = mqtt.connect(url, {
+    username: $('user').value,
+    password: $('pass').value,
+    clientId: 'painel-' + Math.random().toString(16).slice(2, 10),
+    clean: true,
+    reconnectPeriod: 4000,
+    connectTimeout: 10000
+  });
+  client.on('connect', () => { estado('Conectado', 'on'); habilitar(true); log('Conectado ao broker.'); });
+  client.on('reconnect', () => { estado('Reconectando…', 'wait'); habilitar(false); });
+  client.on('close', () => { if (!client || !client.connected){ estado('Desconectado'); habilitar(false); } });
+  client.on('error', e => log('Erro: ' + e.message));
+}
+
+function desconectar(){
+  if (client){ client.end(true); client = null; }
+  estado('Desconectado'); habilitar(false); log('Desconectado.');
+}
+
+montar();
+$('conectar').addEventListener('click', conectar);
+$('desconectar').addEventListener('click', desconectar);
+</script>
+</body>
+</html>
